@@ -41,6 +41,10 @@ import io.quarkus.panache.common.deployment.EntityField;
 import io.quarkus.panache.common.deployment.EntityModel;
 import io.quarkus.panache.common.deployment.MetamodelInfo;
 
+/**
+ * Represents a field in a JPA entity model with type, validation, and relation information.
+ * Refactored to use composition for better separation of concerns.
+ */
 public class ModelField {
 
     public static enum Type {
@@ -61,6 +65,7 @@ public class ModelField {
         JSON;
     }
 
+    // Constant DotNames for annotations
     private static final DotName DOTNAME_MANYTOMANY = DotName.createSimple(ManyToMany.class.getName());
     private static final DotName DOTNAME_MANYTOONE = DotName.createSimple(ManyToOne.class.getName());
     private static final DotName DOTNAME_ONETOMANY = DotName.createSimple(OneToMany.class.getName());
@@ -84,10 +89,22 @@ public class ModelField {
     private static final DotName DOTNAME_URL = DotName.createSimple(URL.class.getName());
     public static final String NAMED_BLOB_DESCRIPTOR = "L" + NamedBlob.class.getName().replace('.', '/') + ";";
 
-    // For views
+    // ========================================================================
+    // COMPOSED OBJECTS - New architecture
+    // ========================================================================
+
+    private final FieldTypeInfo typeInfo;
+    private final FieldRelationInfo relationInfo;
+    private final FieldValidationInfo validationInfo;
+
+    // ========================================================================
+    // PUBLIC FIELDS - For backward compatibility
+    // ========================================================================
+
+    // For views - delegated to composed objects
     public String name;
     public String label;
-    public Type type = Type.Text;
+    public Type type;
     public String relationClass;
     public String relationIdFieldName;
     public long min, max;
@@ -99,201 +116,350 @@ public class ModelField {
     public EntityField entityField;
     public EntityField inverseField;
     public List<AnnotationInstance> validation = new ArrayList<>();
-    // use this rather than EntitiField.signature which is set later (why?)
     public String signature;
     public boolean relationOwner;
     public boolean id;
     public boolean generatedValue;
     public String relationIdFieldClass;
 
+    // ========================================================================
+    // CONSTRUCTOR
+    // ========================================================================
+
     public ModelField(EntityField entityField, String entityClass, MetamodelInfo metamodelInfo, IndexView index) {
+        this.entityField = entityField;
         this.name = entityField.name;
         this.label = JavaExtensions.capitalised(this.name);
+
         ClassInfo classInfo = index.getClassByName(DotName.createSimple(entityClass));
         FieldInfo field = classInfo.field(entityField.name);
         this.signature = field.genericSignature();
-        AnnotationInstance oneToOne = field.annotation(DOTNAME_ONETOONE);
-        AnnotationInstance column = field.annotation(DOTNAME_COLUMN);
-        AnnotationInstance notNull = field.annotation(DOTNAME_NOT_NULL);
-        AnnotationInstance jdbcTypeCode = field.annotation(DOTNAME_JDBC_TYPE_CODE);
+
+        // Initialize composed objects
+        this.typeInfo = new FieldTypeInfo(entityField);
+        this.relationInfo = new FieldRelationInfo();
+        this.validationInfo = new FieldValidationInfo();
+
+        // Determine field properties
         this.id = field.annotation(DOTNAME_ID) != null;
         this.generatedValue = field.annotation(DOTNAME_GENERATED_VALUE) != null;
-        if (jdbcTypeCode != null
-                && jdbcTypeCode.value().asInt() == SqlTypes.JSON) {
-            this.type = Type.JSON;
-        } else if (entityField.descriptor.equals("B")) {
-            this.type = Type.Number;
-            min = Byte.MIN_VALUE;
-            max = Byte.MAX_VALUE;
-            step = 1;
-        } else if (entityField.descriptor.equals("S")) {
-            this.type = Type.Number;
-            min = Short.MIN_VALUE;
-            max = Short.MAX_VALUE;
-            step = 1;
-        } else if (entityField.descriptor.equals("I")
-                || entityField.descriptor.equals("Ljava/lang/Integer;")) {
-            this.type = Type.Number;
-            min = Integer.MIN_VALUE;
-            max = Integer.MAX_VALUE;
-            step = 1;
-        } else if (entityField.descriptor.equals("J")
-                || entityField.descriptor.equals("Ljava/lang/Long;")) {
-            this.type = Type.Number;
-            min = Long.MIN_VALUE;
-            max = Long.MAX_VALUE;
-            step = 1;
-        } else if (entityField.descriptor.equals("C")) {
-            this.type = Type.Text;
-            min = 1;
-            max = 1;
-        } else if (entityField.descriptor.equals("D")
-                || entityField.descriptor.equals("Ljava/lang/Double;")
-                || entityField.descriptor.equals("F")
-                || entityField.descriptor.equals("Ljava/lang/Float;")) {
-            this.type = Type.Number;
-            // this allows floats in number fields
-            step = 0.00001;
-        } else if (entityField.descriptor.equals("Z")
-                || entityField.descriptor.equals("Ljava/lang/Boolean;")) {
-            this.type = Type.Checkbox;
-        } else if (entityField.descriptor.equals("[B")
+
+        // Process field
+        processFieldType(field, entityField, metamodelInfo, index);
+        processValidation(field, metamodelInfo);
+        syncPublicFields();
+    }
+
+    // ========================================================================
+    // FIELD PROCESSING
+    // ========================================================================
+
+    private void processFieldType(FieldInfo field, EntityField entityField, MetamodelInfo metamodelInfo, IndexView index) {
+        AnnotationInstance oneToOne = field.annotation(DOTNAME_ONETOONE);
+        AnnotationInstance column = field.annotation(DOTNAME_COLUMN);
+        AnnotationInstance jdbcTypeCode = field.annotation(DOTNAME_JDBC_TYPE_CODE);
+
+        // JSON type
+        if (jdbcTypeCode != null && jdbcTypeCode.value().asInt() == SqlTypes.JSON) {
+            typeInfo.type = Type.JSON;
+            return;
+        }
+
+        // Numeric types
+        if (processNumericType(entityField)) {
+            return;
+        }
+
+        // Character type
+        if (entityField.descriptor.equals("C")) {
+            typeInfo.type = Type.Text;
+            typeInfo.min = 1;
+            typeInfo.max = 1;
+            return;
+        }
+
+        // Boolean type
+        if (entityField.descriptor.equals("Z") || entityField.descriptor.equals("Ljava/lang/Boolean;")) {
+            typeInfo.type = Type.Checkbox;
+            return;
+        }
+
+        // Binary types
+        if (entityField.descriptor.equals("[B")
                 || entityField.descriptor.equals("Ljava/sql/Blob;")
                 || entityField.descriptor.equals(NAMED_BLOB_DESCRIPTOR)) {
-            this.type = Type.Binary;
-        } else if (entityField.descriptor.equals("Ljava/lang/String;")) {
-            AnnotationInstance length = field.annotation(DOTNAME_LENGTH);
-            AnnotationInstance size = field.annotation(DOTNAME_SIZE);
-            if (column != null && column.value("length") != null && column.value("length").asInt() > 255) {
-                this.type = Type.LargeText;
-            } else if (length != null && length.value("max") != null && length.value("max").asInt() > 255) {
-                this.type = Type.LargeText;
-            } else if (size != null && size.value("max") != null && size.value("max").asInt() > 255) {
-                this.type = Type.LargeText;
-            } else if (jdbcTypeCode != null && jdbcTypeCode.value() != null
-                    && jdbcTypeCode.value().asInt() == Types.LONGVARCHAR) {
-                this.type = Type.LargeText;
-            } else if (field.hasAnnotation(DOTNAME_LOB)) {
-                this.type = Type.LargeText;
-            } else {
-                this.type = Type.Text;
-            }
-        } else if (entityField.descriptor.equals("Ljava/util/Date;")
-                || entityField.descriptor.equals("Ljava/time/LocalDateTime;")) {
-            this.type = Type.DateTimeLocal;
+            typeInfo.type = Type.Binary;
+            return;
+        }
+
+        // String types
+        if (entityField.descriptor.equals("Ljava/lang/String;")) {
+            processStringType(field, column, jdbcTypeCode);
+            return;
+        }
+
+        // Date/Time types
+        if (processDateTimeType(entityField)) {
+            return;
+        }
+
+        // Enum
+        if (field.hasAnnotation(DOTNAME_ENUMERATED)) {
+            typeInfo.type = Type.Enum;
+            return;
+        }
+
+        // Relations
+        if (processRelations(field, entityField, metamodelInfo, index, oneToOne)) {
+            return;
+        }
+
+        // Check if it's an enum by class info
+        checkEnumByClassInfo(field, index);
+    }
+
+    private boolean processNumericType(EntityField entityField) {
+        if (entityField.descriptor.equals("B")) {
+            typeInfo.type = Type.Number;
+            typeInfo.min = Byte.MIN_VALUE;
+            typeInfo.max = Byte.MAX_VALUE;
+            typeInfo.step = 1;
+            return true;
+        } else if (entityField.descriptor.equals("S")) {
+            typeInfo.type = Type.Number;
+            typeInfo.min = Short.MIN_VALUE;
+            typeInfo.max = Short.MAX_VALUE;
+            typeInfo.step = 1;
+            return true;
+        } else if (entityField.descriptor.equals("I") || entityField.descriptor.equals("Ljava/lang/Integer;")) {
+            typeInfo.type = Type.Number;
+            typeInfo.min = Integer.MIN_VALUE;
+            typeInfo.max = Integer.MAX_VALUE;
+            typeInfo.step = 1;
+            return true;
+        } else if (entityField.descriptor.equals("J") || entityField.descriptor.equals("Ljava/lang/Long;")) {
+            typeInfo.type = Type.Number;
+            typeInfo.min = Long.MIN_VALUE;
+            typeInfo.max = Long.MAX_VALUE;
+            typeInfo.step = 1;
+            return true;
+        } else if (entityField.descriptor.equals("D") || entityField.descriptor.equals("Ljava/lang/Double;")
+                || entityField.descriptor.equals("F") || entityField.descriptor.equals("Ljava/lang/Float;")) {
+            typeInfo.type = Type.Number;
+            typeInfo.step = 0.00001;
+            return true;
+        }
+        return false;
+    }
+
+    private void processStringType(FieldInfo field, AnnotationInstance column, AnnotationInstance jdbcTypeCode) {
+        AnnotationInstance length = field.annotation(DOTNAME_LENGTH);
+        AnnotationInstance size = field.annotation(DOTNAME_SIZE);
+
+        boolean isLargeText = (column != null && column.value("length") != null && column.value("length").asInt() > 255)
+                || (length != null && length.value("max") != null && length.value("max").asInt() > 255)
+                || (size != null && size.value("max") != null && size.value("max").asInt() > 255)
+                || (jdbcTypeCode != null && jdbcTypeCode.value() != null && jdbcTypeCode.value().asInt() == Types.LONGVARCHAR)
+                || field.hasAnnotation(DOTNAME_LOB);
+
+        typeInfo.type = isLargeText ? Type.LargeText : Type.Text;
+    }
+
+    private boolean processDateTimeType(EntityField entityField) {
+        if (entityField.descriptor.equals("Ljava/util/Date;") || entityField.descriptor.equals("Ljava/time/LocalDateTime;")) {
+            typeInfo.type = Type.DateTimeLocal;
+            return true;
         } else if (entityField.descriptor.equals("Ljava/time/LocalDate;")) {
-            this.type = Type.Date;
+            typeInfo.type = Type.Date;
+            return true;
         } else if (entityField.descriptor.equals("Ljava/time/LocalTime;")) {
-            this.type = Type.Time;
+            typeInfo.type = Type.Time;
+            return true;
         } else if (entityField.descriptor.equals("Ljava/sql/Timestamp;")) {
-            this.type = Type.Timestamp;
-        } else if (field.hasAnnotation(DOTNAME_ENUMERATED)) {
-            this.type = Type.Enum;
-        } else if (field.hasAnnotation(DOTNAME_ONETOMANY)) {
-            this.type = Type.MultiRelation;
-            this.relationClass = field.type().asParameterizedType().arguments().get(0).name().toString();
-            EntityModel relationModel = metamodelInfo.getEntityModel(this.relationClass);
-            AnnotationValue mappedBy = field.annotation(DOTNAME_ONETOMANY).value("mappedBy");
-            String inverseField = mappedBy.asString();
-            // FIXME: inheritance
-            this.inverseField = relationModel.fields.get(inverseField);
-            this.relationOwner = false;
-            FieldInfo relationIdField = findRelationIdField(relationClass, index);
-            this.relationIdFieldName = relationIdField.name();
-            this.relationIdFieldClass = relationIdField.type().asClassType().name().toString();
-        } else if (field.hasAnnotation(DOTNAME_MANYTOMANY)) {
-            this.type = Type.MultiMultiRelation;
-            this.relationClass = field.type().asParameterizedType().arguments().get(0).name().toString();
-            EntityModel relationModel = metamodelInfo.getEntityModel(this.relationClass);
-            AnnotationValue mappedBy = field.annotation(DOTNAME_MANYTOMANY).value("mappedBy");
-            if (mappedBy != null) {
-                // non-owning
-                String inverseField = mappedBy.asString();
-                // FIXME: inheritance
-                this.inverseField = relationModel.fields.get(inverseField);
-                this.relationOwner = false;
-            } else {
-                ClassInfo relationClassInfo = index.getClassByName(DotName.createSimple(relationClass));
-                for (FieldInfo relationField : relationClassInfo.fields()) {
-                    AnnotationInstance manyToMany = relationField.annotation(DOTNAME_MANYTOMANY);
-                    if (manyToMany != null) {
-                        AnnotationValue value = manyToMany.value("mappedBy");
-                        if (value != null && value.asString().equals(field.name())) {
-                            // we found it
-                            this.inverseField = relationModel.fields.get(relationField.name());
-                            break;
-                        }
+            typeInfo.type = Type.Timestamp;
+            return true;
+        }
+        return false;
+    }
+
+    private boolean processRelations(FieldInfo field, EntityField entityField, MetamodelInfo metamodelInfo,
+            IndexView index, AnnotationInstance oneToOne) {
+        // OneToMany
+        if (field.hasAnnotation(DOTNAME_ONETOMANY)) {
+            return processOneToMany(field, metamodelInfo, index);
+        }
+
+        // ManyToMany
+        if (field.hasAnnotation(DOTNAME_MANYTOMANY)) {
+            return processManyToMany(field, metamodelInfo, index);
+        }
+
+        // OneToOne with mappedBy
+        if (oneToOne != null && oneToOne.value("mappedBy") != null) {
+            typeInfo.type = Type.Ignore;
+            relationInfo.relationOwner = false;
+            return true;
+        }
+
+        // ManyToOne or OneToOne (owning side)
+        if (field.hasAnnotation(DOTNAME_MANYTOONE) || (oneToOne != null && oneToOne.value("mappedBy") == null)) {
+            return processManyToOneOrOneToOne(entityField, index);
+        }
+
+        return false;
+    }
+
+    private boolean processOneToMany(FieldInfo field, MetamodelInfo metamodelInfo, IndexView index) {
+        typeInfo.type = Type.MultiRelation;
+        relationInfo.relationClass = field.type().asParameterizedType().arguments().get(0).name().toString();
+        EntityModel relationModel = metamodelInfo.getEntityModel(relationInfo.relationClass);
+        AnnotationValue mappedBy = field.annotation(DOTNAME_ONETOMANY).value("mappedBy");
+        String inverseFieldName = mappedBy.asString();
+        relationInfo.inverseField = relationModel.fields.get(inverseFieldName);
+        relationInfo.relationOwner = false;
+
+        FieldInfo relationIdField = findRelationIdField(relationInfo.relationClass, index);
+        if (relationIdField != null) {
+            relationInfo.relationIdFieldName = relationIdField.name();
+            relationInfo.relationIdFieldClass = relationIdField.type().asClassType().name().toString();
+        }
+        return true;
+    }
+
+    private boolean processManyToMany(FieldInfo field, MetamodelInfo metamodelInfo, IndexView index) {
+        typeInfo.type = Type.MultiMultiRelation;
+        relationInfo.relationClass = field.type().asParameterizedType().arguments().get(0).name().toString();
+        EntityModel relationModel = metamodelInfo.getEntityModel(relationInfo.relationClass);
+        AnnotationValue mappedBy = field.annotation(DOTNAME_MANYTOMANY).value("mappedBy");
+
+        if (mappedBy != null) {
+            // Non-owning side
+            String inverseFieldName = mappedBy.asString();
+            relationInfo.inverseField = relationModel.fields.get(inverseFieldName);
+            relationInfo.relationOwner = false;
+        } else {
+            // Owning side - find inverse
+            ClassInfo relationClassInfo = index.getClassByName(DotName.createSimple(relationInfo.relationClass));
+            for (FieldInfo relationField : relationClassInfo.fields()) {
+                AnnotationInstance manyToMany = relationField.annotation(DOTNAME_MANYTOMANY);
+                if (manyToMany != null) {
+                    AnnotationValue value = manyToMany.value("mappedBy");
+                    if (value != null && value.asString().equals(field.name())) {
+                        relationInfo.inverseField = relationModel.fields.get(relationField.name());
+                        break;
                     }
                 }
-                this.relationOwner = true;
             }
-            FieldInfo relationIdField = findRelationIdField(relationClass, index);
-            this.relationIdFieldName = relationIdField.name();
-            this.relationIdFieldClass = relationIdField.type().asClassType().name().toString();
-        } else if (oneToOne != null
-                && oneToOne.value("mappedBy") != null) {
-            // actually we may want to support this in the future too?
-            this.type = Type.Ignore;
-            this.relationOwner = false;
-        } else if (field.hasAnnotation(DOTNAME_MANYTOONE)
-                || (oneToOne != null
-                        && oneToOne.value("mappedBy") == null)) {
-            this.type = Type.Relation;
-            this.relationClass = entityField.descriptor.substring(1, entityField.descriptor.length() - 1).replace('/', '.');
-            FieldInfo relationIdField = findRelationIdField(relationClass, index);
-            this.relationIdFieldName = relationIdField.name();
-            this.relationIdFieldClass = relationIdField.type().asClassType().name().toString();
-            this.relationOwner = true;
-        } else {
-            // see if we can find what to do with it
-            ClassInfo fieldClassInfo = index.getClassByName(field.type().name());
-            //            System.err.println("Unknown field type: " + field.type() + " classinfo: " + fieldClassInfo);
-            if (fieldClassInfo != null) {
-                if (fieldClassInfo.isEnum()) {
-                    this.type = Type.Enum;
-                }
-            }
+            relationInfo.relationOwner = true;
         }
-        this.help = "";
-        AnnotationInstance joinColumn = field.annotation(DOTNAME_JOIN_COLUMN);
+
+        FieldInfo relationIdField = findRelationIdField(relationInfo.relationClass, index);
+        if (relationIdField != null) {
+            relationInfo.relationIdFieldName = relationIdField.name();
+            relationInfo.relationIdFieldClass = relationIdField.type().asClassType().name().toString();
+        }
+        return true;
+    }
+
+    private boolean processManyToOneOrOneToOne(EntityField entityField, IndexView index) {
+        typeInfo.type = Type.Relation;
+        relationInfo.relationClass = entityField.descriptor.substring(1, entityField.descriptor.length() - 1).replace('/', '.');
+        relationInfo.relationOwner = true;
+
+        FieldInfo relationIdField = findRelationIdField(relationInfo.relationClass, index);
+        if (relationIdField != null) {
+            relationInfo.relationIdFieldName = relationIdField.name();
+            relationInfo.relationIdFieldClass = relationIdField.type().asClassType().name().toString();
+        }
+        return true;
+    }
+
+    private void checkEnumByClassInfo(FieldInfo field, IndexView index) {
+        ClassInfo fieldClassInfo = index.getClassByName(field.type().name());
+        if (fieldClassInfo != null && fieldClassInfo.isEnum()) {
+            typeInfo.type = Type.Enum;
+        }
+    }
+
+    // ========================================================================
+    // VALIDATION PROCESSING
+    // ========================================================================
+
+    private void processValidation(FieldInfo field, MetamodelInfo metamodelInfo) {
+        validationInfo.help = "";
         boolean requiredAdded = false;
-        // all of those are passed as strings, and the "(none)" choice is an empty string, so turn them into a @NotBlank
+
+        AnnotationInstance column = field.annotation(DOTNAME_COLUMN);
+        AnnotationInstance joinColumn = field.annotation(DOTNAME_JOIN_COLUMN);
+
+        // Check for required based on nullable
         if ((column != null && column.value("nullable") != null && !column.value("nullable").asBoolean())
                 || (joinColumn != null && joinColumn.value("nullable") != null && !joinColumn.value("nullable").asBoolean())
                         && !field.hasAnnotation(DOTNAME_NOT_BLANK)) {
-            validation.add(AnnotationInstance.create(DOTNAME_NOT_BLANK, null, Collections.emptyList()));
-            help += "This field is required. ";
-            required = true;
+            validationInfo.addValidation(AnnotationInstance.create(DOTNAME_NOT_BLANK, null, Collections.emptyList()));
+            validationInfo.appendHelp("This field is required. ");
+            validationInfo.required = true;
             requiredAdded = true;
         }
+
+        // Process validation annotations
         for (DotName supportedValidationAnnotation : new DotName[] { DOTNAME_NOT_EMPTY, DOTNAME_NOT_NULL, DOTNAME_NOT_BLANK,
                 DOTNAME_SIZE, DOTNAME_LENGTH, DOTNAME_URL }) {
             if (field.hasAnnotation(supportedValidationAnnotation)) {
-                AnnotationInstance value = field.annotation(supportedValidationAnnotation);
-                validation.add(value);
-                if (supportedValidationAnnotation == DOTNAME_NOT_EMPTY
-                        || supportedValidationAnnotation == DOTNAME_NOT_NULL
-                        || supportedValidationAnnotation == DOTNAME_NOT_BLANK) {
-                    // don't add it twice
-                    required = true;
-                    if (!requiredAdded) {
-                        help += "This field is required. ";
-                        requiredAdded = true;
-                    }
-                } else if (supportedValidationAnnotation == DOTNAME_URL) {
-                    help += "This field must be a URL. ";
-                } else if (supportedValidationAnnotation == DOTNAME_SIZE
-                        || supportedValidationAnnotation == DOTNAME_LENGTH) {
-                    help += "This field must be between " + withDefault(value.value("min"), 0) + " and "
-                            + withDefault(value.value("max"), Integer.MAX_VALUE) + " characters. ";
-                }
+                processValidationAnnotation(field, supportedValidationAnnotation, requiredAdded);
+                requiredAdded = true;
             }
         }
+
+        // Add column comment as help
         if (column != null && column.value("comment") != null && !column.value("comment").asString().isBlank()) {
-            help += column.value("comment").asString();
+            validationInfo.appendHelp(column.value("comment").asString());
         }
-        this.entityField = entityField;
     }
+
+    private void processValidationAnnotation(FieldInfo field, DotName annotationType, boolean requiredAdded) {
+        AnnotationInstance annotation = field.annotation(annotationType);
+        validationInfo.addValidation(annotation);
+
+        if (annotationType == DOTNAME_NOT_EMPTY || annotationType == DOTNAME_NOT_NULL || annotationType == DOTNAME_NOT_BLANK) {
+            validationInfo.required = true;
+            if (!requiredAdded) {
+                validationInfo.appendHelp("This field is required. ");
+            }
+        } else if (annotationType == DOTNAME_URL) {
+            validationInfo.appendHelp("This field must be a URL. ");
+        } else if (annotationType == DOTNAME_SIZE || annotationType == DOTNAME_LENGTH) {
+            int min = withDefault(annotation.value("min"), 0);
+            int max = withDefault(annotation.value("max"), Integer.MAX_VALUE);
+            validationInfo.appendHelp("This field must be between " + min + " and " + max + " characters. ");
+        }
+    }
+
+    // ========================================================================
+    // SYNC PUBLIC FIELDS - For backward compatibility
+    // ========================================================================
+
+    private void syncPublicFields() {
+        // Sync from composed objects to public fields
+        this.type = typeInfo.type;
+        this.min = typeInfo.min;
+        this.max = typeInfo.max;
+        this.step = typeInfo.step;
+
+        this.relationClass = relationInfo.relationClass;
+        this.relationIdFieldName = relationInfo.relationIdFieldName;
+        this.relationIdFieldClass = relationInfo.relationIdFieldClass;
+        this.relationOwner = relationInfo.relationOwner;
+        this.inverseField = relationInfo.inverseField;
+
+        this.help = validationInfo.help;
+        this.required = validationInfo.required;
+        this.validation = validationInfo.validation;
+    }
+
+    // ========================================================================
+    // UTILITY METHODS
+    // ========================================================================
 
     private <T> T withDefault(AnnotationValue value, T def) {
         if (value == null)
@@ -306,7 +472,6 @@ public class ModelField {
         if (classInfo == null) {
             return null;
         }
-        // only look at those fields
         if (classInfo.hasAnnotation(DOTNAME_ENTITY) || classInfo.hasAnnotation(DOTNAME_MAPPED_SUPERCLASS)) {
             for (FieldInfo fieldInfo : classInfo.fields()) {
                 if (fieldInfo.hasAnnotation(DOTNAME_TRANSIENT)) {
@@ -317,7 +482,6 @@ public class ModelField {
                 }
             }
         }
-        // look up
         DotName superName = classInfo.superName();
         if (superName != null) {
             return findRelationIdField(superName.toString(), index);
@@ -325,8 +489,24 @@ public class ModelField {
         return null;
     }
 
+    // ========================================================================
+    // PUBLIC API
+    // ========================================================================
+
     public String getClassName() {
         return entityField.descriptor.substring(1, entityField.descriptor.length() - 1).replace('/', '.');
+    }
+
+    public FieldTypeInfo getTypeInfo() {
+        return typeInfo;
+    }
+
+    public FieldRelationInfo getRelationInfo() {
+        return relationInfo;
+    }
+
+    public FieldValidationInfo getValidationInfo() {
+        return validationInfo;
     }
 
     @Override
@@ -344,8 +524,7 @@ public class ModelField {
     private static void addFields(List<ModelField> fields, EntityModel entityModel, MetamodelInfo metamodelInfo,
             IndexView index) {
         for (Entry<String, EntityField> entry : entityModel.fields.entrySet()) {
-            ModelField mf = new ModelField(entry.getValue(), entityModel.name, metamodelInfo,
-                    index);
+            ModelField mf = new ModelField(entry.getValue(), entityModel.name, metamodelInfo, index);
             if (mf.type != Type.Ignore) {
                 fields.add(mf);
             }

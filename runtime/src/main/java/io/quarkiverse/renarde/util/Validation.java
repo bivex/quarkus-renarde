@@ -16,13 +16,19 @@ import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Path.Node;
 import jakarta.validation.Validator;
 
+/**
+ * Validation utility for managing form validation errors.
+ *
+ * Refactored to remove circular dependency with Flash by using ValidationContext.
+ * Errors are written to ValidationContext which Flash then persists in cookies.
+ */
 @Named("validation")
 @RequestScoped
 public class Validation {
     @Inject
     Validator validator;
     @Inject
-    Flash flash;
+    ValidationContext validationContext;
 
     private Map<String, Error> errors = new TreeMap<>();
 
@@ -30,9 +36,13 @@ public class Validation {
         return !errors.isEmpty();
     }
 
+    /**
+     * Persist validation errors to flash scope for next request.
+     * Errors are written to ValidationContext instead of Flash directly.
+     */
     public void keep() {
         for (Error error : errors.values()) {
-            flash.flash("error." + error.field, error.getMessage("\f"));
+            validationContext.addFlashError(error.field, error.getMessage("\f"));
         }
     }
 
@@ -132,11 +142,16 @@ public class Validation {
         return JavaExtensions.capitalised(message) + ".";
     }
 
-    public void loadErrorsFromFlash() {
-        for (Entry<String, Object> entry : flash.values().entrySet()) {
+    /**
+     * Load errors from ValidationContext (which was populated from Flash cookie).
+     * This replaces the previous loadErrorsFromFlash() method that directly accessed Flash.
+     */
+    public void loadErrorsFromContext() {
+        Map<String, String> flashErrors = validationContext.getFlashErrors();
+        for (Entry<String, String> entry : flashErrors.entrySet()) {
             if (entry.getKey().startsWith("error.")) {
                 String field = entry.getKey().substring(6);
-                String value = (String) entry.getValue();
+                String value = entry.getValue();
                 for (String error : value.split("\f")) {
                     addError(field, error);
                 }

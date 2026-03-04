@@ -25,6 +25,11 @@ import io.vertx.core.http.HttpServerResponse;
 import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonObject;
 
+/**
+ * Flash scope for persisting messages across HTTP redirects.
+ *
+ * Refactored to remove circular dependency with Validation by using ValidationContext.
+ */
 @Named("flash")
 @RequestScoped
 public class Flash {
@@ -33,7 +38,7 @@ public class Flash {
     HttpServerRequest request;
 
     @Inject
-    Validation validation;
+    ValidationContext validationContext;
 
     private Map<String, Object> values = new HashMap<>();
     private Map<String, Object> futureValues = new HashMap<>();
@@ -41,7 +46,12 @@ public class Flash {
     public final static String FLASH_COOKIE_NAME = "_renarde_flash";
 
     public void setFlashCookie() {
-        setFlashCookie(request, request.response(), futureValues);
+        // Merge futureValues with validation errors from ValidationContext
+        Map<String, Object> allValues = new HashMap<>(futureValues);
+        if (validationContext.hasFlashErrors()) {
+            allValues.putAll(validationContext.getFlashErrors());
+        }
+        setFlashCookie(request, request.response(), allValues);
     }
 
     public static void setFlashCookie(HttpServerRequest request, HttpServerResponse response, Map<String, Object> values) {
@@ -66,7 +76,8 @@ public class Flash {
             Map<String, Object> data = decodeCookieValue(cookie.getValue());
             if (data != null) {
                 values.putAll(data);
-                validation.loadErrorsFromFlash();
+                // Load errors into ValidationContext instead of calling Validation directly
+                validationContext.loadFromFlash(data);
             }
         }
         // must do this after we've read the value, otherwise we can't read it, for some reason
