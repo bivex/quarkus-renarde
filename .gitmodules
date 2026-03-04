@@ -1,3 +1,4 @@
 [submodule "quarkus-renarde-todo"]
 	path = quarkus-renarde-todo
-	url = https://github.com/quarkiverse/renarde-todo
+	url = https://github.com/bivex/quarkus-renarde-todo
+	branch = main
