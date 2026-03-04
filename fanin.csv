@@ -3,7 +3,7 @@ From Files,To File,References,From Entities,To Entities
 14,BackofficeController.java,27,27,1
 3,BackofficeIndexController.java,5,5,1
 9,BackUtil.java,9,9,1
-1,BinaryFieldProcessor.java,1,1,1
+2,BinaryFieldProcessor.java,4,2,2
 1,BooleanFieldProcessor.java,1,1,1
 2,ConstraintedEntity.java,12,4,9
 2,ContactService.java,34,15,8
@@ -24,8 +24,10 @@ From Files,To File,References,From Entities,To Entities
 8,ExampleEntity.java,188,16,43
 2,ExampleEnum.java,12,6,3
 1,ExcludedControllerBuildItem.java,5,3,3
-9,FieldProcessingContext.java,61,10,6
-10,FieldProcessor.java,14,13,3
+11,FieldProcessingContext.java,78,15,17
+11,FieldProcessor.java,15,14,4
+1,FieldProcessorDelegate.java,21,2,9
+1,FieldProcessorRegistry.java,7,6,3
 1,FieldRelationInfo.java,32,8,7
 1,FieldTypeInfo.java,43,13,6
 1,FieldValidationInfo.java,17,6,7
@@ -52,9 +54,9 @@ From Files,To File,References,From Entities,To Entities
 7,MockOidcTestResource.java,59,29,5
 1,MockSpotifyOidc.java,2,2,1
 3,MockTwitterOidc.java,4,4,1
-2,Mode.java,4,4,2
-15,ModelField.java,336,53,31
-1,MultiRelationFieldProcessor.java,1,1,1
+3,Mode.java,9,5,3
+16,ModelField.java,262,56,31
+2,MultiRelationFieldProcessor.java,4,2,2
 1,MyParamConverters.java,2,2,1
 1,MyValidationInterceptor.java,1,1,1
 7,NamedBlob.java,39,18,7
