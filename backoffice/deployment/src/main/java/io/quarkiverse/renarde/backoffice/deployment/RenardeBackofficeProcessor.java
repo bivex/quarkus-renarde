@@ -6,15 +6,10 @@ import java.lang.annotation.Annotation;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.sql.Blob;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Date;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -43,6 +38,8 @@ import org.jboss.resteasy.reactive.multipart.FileUpload;
 import io.quarkiverse.renarde.Controller;
 import io.quarkiverse.renarde.backoffice.BackofficeController;
 import io.quarkiverse.renarde.backoffice.BackofficeIndexController;
+import io.quarkiverse.renarde.backoffice.deployment.field.FieldProcessingContext;
+import io.quarkiverse.renarde.backoffice.deployment.field.FieldProcessorDelegate;
 import io.quarkiverse.renarde.backoffice.impl.BackUtil;
 import io.quarkiverse.renarde.backoffice.impl.CreateAction;
 import io.quarkiverse.renarde.backoffice.impl.EditAction;
@@ -67,7 +64,6 @@ import io.quarkus.gizmo.MethodCreator;
 import io.quarkus.gizmo.MethodDescriptor;
 import io.quarkus.gizmo.ResultHandle;
 import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
-import io.quarkus.panache.common.deployment.EntityField;
 import io.quarkus.panache.common.deployment.EntityModel;
 import io.quarkus.panache.hibernate.common.deployment.HibernateMetamodelForFieldAccessBuildItem;
 import io.quarkus.qute.Engine;
@@ -596,297 +592,72 @@ public class RenardeBackofficeProcessor {
                 entityVariable = m.createVariable(entityTypeDescriptor);
                 m.assign(entityVariable, m.newInstance(MethodDescriptor.ofConstructor(entityClass)));
             }
+            // Use FieldProcessorDelegate for field processing
+            FieldProcessorDelegate delegate = new FieldProcessorDelegate();
+
             i = 0;
             for (ModelField field : fields) {
                 ResultHandle value = null;
                 ResultHandle parameterValue = m.getMethodParam(i + offset);
-                i++;
-                if (field.type == ModelField.Type.Text || field.type == ModelField.Type.LargeText) {
-                    if (field.entityField.descriptor.equals("Ljava/lang/String;")) {
-                        value = m.invokeStaticMethod(
-                                MethodDescriptor.ofMethod(BackUtil.class, "stringField", String.class, String.class),
-                                parameterValue);
-                    } else if (field.entityField.descriptor.equals("C")) {
-                        value = m.invokeStaticMethod(
-                                MethodDescriptor.ofMethod(BackUtil.class, "charField", char.class, String.class),
-                                parameterValue);
-                    } else {
-                        throw new RuntimeException(
-                                "Unknown text field " + field + " descriptor: " + field.entityField.descriptor);
-                    }
-                } else if (field.type == ModelField.Type.Binary) {
-                    // binary fields consume two parameters
-                    ResultHandle parameterUnsetValue = parameterValue;
-                    parameterValue = m.getMethodParam(i + offset);
-                    i++;
-                    BranchResult hasValueTest = m.ifTrue(m.invokeStaticMethod(
-                            MethodDescriptor.ofMethod(BackUtil.class, "isSet", boolean.class, FileUpload.class),
-                            parameterValue));
-                    // we do not set the value, we handle setters ourselves
-                    try (BytecodeCreator hasValueTrueBranch = hasValueTest.trueBranch()) {
-                        ResultHandle uploadValue;
-                        if (field.entityField.descriptor.equals("[B")) {
-                            uploadValue = hasValueTrueBranch.invokeStaticMethod(
-                                    MethodDescriptor.ofMethod(BackUtil.class, "byteArrayField", byte[].class, FileUpload.class),
-                                    parameterValue);
-                        } else if (field.entityField.descriptor.equals("Ljava/sql/Blob;")) {
-                            uploadValue = hasValueTrueBranch.invokeStaticMethod(
-                                    MethodDescriptor.ofMethod(BackUtil.class, "blobField", Blob.class, FileUpload.class),
-                                    parameterValue);
-                        } else if (field.entityField.descriptor.equals(ModelField.NAMED_BLOB_DESCRIPTOR)) {
-                            uploadValue = hasValueTrueBranch.invokeStaticMethod(
-                                    MethodDescriptor.ofMethod(BackUtil.class, "namedBlobField", NamedBlob.class,
-                                            FileUpload.class),
-                                    parameterValue);
-                        } else {
-                            throw new RuntimeException(
-                                    "Unknown binary field " + field + " descriptor: " + field.entityField.descriptor);
-                        }
-                        hasValueTrueBranch.invokeVirtualMethod(
-                                MethodDescriptor.ofMethod(entityClass, field.entityField.getSetterName(), void.class,
-                                        field.entityField.descriptor),
-                                entityVariable, uploadValue);
-                    }
-                    try (BytecodeCreator hasValueFalseBranch = hasValueTest.falseBranch()) {
-                        BranchResult unsetTest = hasValueFalseBranch.ifTrue(hasValueFalseBranch.invokeStaticMethod(
-                                MethodDescriptor.ofMethod(BackUtil.class, "booleanField", boolean.class, String.class),
-                                parameterUnsetValue));
-                        try (BytecodeCreator unsetTrueBranch = unsetTest.trueBranch()) {
-                            // set to null
-                            unsetTrueBranch.invokeVirtualMethod(
-                                    MethodDescriptor.ofMethod(entityClass, field.entityField.getSetterName(), void.class,
-                                            field.entityField.descriptor),
-                                    entityVariable, unsetTrueBranch.loadNull());
-                        }
-                        // nothing on the false branch
-                        unsetTest.falseBranch().close();
-                    }
-                } else if (field.entityField.descriptor.equals("Z")) {
-                    value = m.invokeStaticMethod(
-                            MethodDescriptor.ofMethod(BackUtil.class, "booleanField", boolean.class, String.class),
-                            parameterValue);
-                } else if (field.entityField.descriptor.equals("Ljava/lang/Boolean;")) {
-                    value = m.invokeStaticMethod(
-                            MethodDescriptor.ofMethod(BackUtil.class, "booleanField", boolean.class, String.class),
-                            parameterValue);
-                    value = m.invokeStaticMethod(
-                            MethodDescriptor.ofMethod(Boolean.class, "valueOf", Boolean.class, boolean.class), value);
-                } else if (field.entityField.descriptor.equals("Ljava/lang/Integer;")) {
-                    value = m.invokeStaticMethod(
-                            MethodDescriptor.ofMethod(BackUtil.class, "integerWrapperField", Integer.class, String.class),
-                            parameterValue);
-                } else if (field.entityField.descriptor.equals("Ljava/lang/Long;")) {
-                    value = m.invokeStaticMethod(
-                            MethodDescriptor.ofMethod(BackUtil.class, "longWrapperField", Long.class, String.class),
-                            parameterValue);
-                } else if (field.entityField.descriptor.equals("Ljava/lang/Double;")) {
-                    value = m.invokeStaticMethod(
-                            MethodDescriptor.ofMethod(BackUtil.class, "doubleWrapperField", Double.class, String.class),
-                            parameterValue);
-                } else if (field.entityField.descriptor.equals("Ljava/lang/Float;")) {
-                    value = m.invokeStaticMethod(
-                            MethodDescriptor.ofMethod(BackUtil.class, "floatWrapperField", Float.class, String.class),
-                            parameterValue);
-                } else if (field.type == ModelField.Type.Number) {
-                    Class<?> primitiveClass;
-                    switch (field.entityField.descriptor) {
-                        case "B":
-                            primitiveClass = byte.class;
-                            break;
-                        case "S":
-                            primitiveClass = short.class;
-                            break;
-                        case "I":
-                            primitiveClass = int.class;
-                            break;
-                        case "J":
-                            primitiveClass = long.class;
-                            break;
-                        case "F":
-                            primitiveClass = float.class;
-                            break;
-                        case "D":
-                            primitiveClass = double.class;
-                            break;
-                        default:
-                            throw new RuntimeException(
-                                    "Unknown number field " + field + " descriptor: " + field.entityField.descriptor);
-                    }
-                    value = m.invokeStaticMethod(
-                            MethodDescriptor.ofMethod(BackUtil.class, primitiveClass.getName() + "Field", primitiveClass,
-                                    String.class),
-                            parameterValue);
-                } else if (field.entityField.descriptor.equals("Ljava/util/Date;")) {
-                    value = m.invokeStaticMethod(
-                            MethodDescriptor.ofMethod(BackUtil.class, "dateField", Date.class, String.class),
-                            parameterValue);
-                } else if (field.entityField.descriptor.equals("Ljava/sql/Timestamp;")) {
-                    value = m.invokeStaticMethod(
-                            MethodDescriptor.ofMethod(BackUtil.class, "sqlTimestampField", java.sql.Timestamp.class,
-                                    String.class),
-                            parameterValue);
-                } else if (field.entityField.descriptor.equals("Ljava/time/LocalDateTime;")) {
-                    value = m.invokeStaticMethod(
-                            MethodDescriptor.ofMethod(BackUtil.class, "localDateTimeField", LocalDateTime.class, String.class),
-                            parameterValue);
-                } else if (field.entityField.descriptor.equals("Ljava/time/LocalDate;")) {
-                    value = m.invokeStaticMethod(
-                            MethodDescriptor.ofMethod(BackUtil.class, "localDateField", LocalDate.class, String.class),
-                            parameterValue);
-                } else if (field.entityField.descriptor.equals("Ljava/time/LocalTime;")) {
-                    value = m.invokeStaticMethod(
-                            MethodDescriptor.ofMethod(BackUtil.class, "localTimeField", LocalTime.class, String.class),
-                            parameterValue);
-                } else if (field.type == ModelField.Type.Enum) {
-                    value = m.invokeStaticMethod(
-                            MethodDescriptor.ofMethod(BackUtil.class, "enumField", Enum.class, Class.class, String.class),
-                            m.loadClass(field.getClassName()),
-                            parameterValue);
-                    value = m.checkCast(value, field.entityField.descriptor);
-                } else if (field.type == ModelField.Type.JSON) {
-                    value = m.invokeStaticMethod(
-                            MethodDescriptor.ofMethod(BackUtil.class, "jsonField", Object.class, String.class, String.class),
-                            m.load(field.signature),
-                            parameterValue);
-                    value = m.checkCast(value, field.entityField.descriptor);
-                } else if (field.type == ModelField.Type.MultiRelation
-                        || field.type == ModelField.Type.MultiMultiRelation) {
-                    // This one does not set the value, and does not go via the setter below, it calls the setter itself
-                    AssignableResultHandle iterator = m.createVariable(Iterator.class);
-                    if (mode == Mode.EDIT) {
-                        // // clear previous list
-                        // Iterator it = entity.relation.iterator();
-                        // while (it.hasNext()) {
-                        //     @OneToMany: ((RelationType)it.next()).owningField = null;
-                        //     @ManyToMany: ((RelationType)it.next()).owningField.remove(entity);
-                        // }
-                        ResultHandle relation = m.invokeVirtualMethod(
-                                MethodDescriptor.ofMethod(entityClass, field.entityField.getGetterName(),
-                                        field.entityField.descriptor),
-                                entityVariable);
-                        m.assign(iterator, m.invokeInterfaceMethod(
-                                MethodDescriptor.ofMethod(Iterable.class, "iterator", Iterator.class), relation));
-                        try (BytecodeCreator loop = m
-                                .whileLoop(bc -> bc.ifTrue(bc.invokeInterfaceMethod(
-                                        MethodDescriptor.ofMethod(Iterator.class, "hasNext", boolean.class), iterator)))
-                                .block()) {
-                            ResultHandle next = loop.checkCast(
-                                    loop.invokeInterfaceMethod(MethodDescriptor.ofMethod(Iterator.class, "next", Object.class),
-                                            iterator),
-                                    field.relationClass);
-                            EntityField inverseField = field.inverseField;
-                            if (inverseField != null) {
-                                if (field.type == ModelField.Type.MultiMultiRelation) {
-                                    ResultHandle inverseRelation = loop.invokeVirtualMethod(
-                                            MethodDescriptor.ofMethod(field.relationClass, inverseField.getGetterName(),
-                                                    inverseField.descriptor),
-                                            next);
-                                    loop.invokeInterfaceMethod(
-                                            MethodDescriptor.ofMethod(List.class, "remove", boolean.class, Object.class),
-                                            inverseRelation, entityVariable);
-                                } else {
-                                    loop.invokeVirtualMethod(
-                                            MethodDescriptor.ofMethod(field.relationClass, inverseField.getSetterName(),
-                                                    void.class,
-                                                    inverseField.descriptor),
-                                            next, loop.loadNull());
-                                }
-                            }
-                        }
-                        // entity.relation.clear();
-                        relation = m.invokeVirtualMethod(
-                                MethodDescriptor.ofMethod(entityClass, field.entityField.getGetterName(),
-                                        field.entityField.descriptor),
-                                entityVariable);
-                        m.invokeInterfaceMethod(MethodDescriptor.ofMethod(List.class, "clear", void.class), relation);
-                    } else {
-                        // create the empty list and assign it
-                        m.invokeVirtualMethod(
-                                MethodDescriptor.ofMethod(entityClass, field.entityField.getSetterName(), void.class,
-                                        field.entityField.descriptor),
-                                entityVariable,
-                                m.newInstance(MethodDescriptor.ofConstructor(ArrayList.class)));
 
-                    }
-                    // // change new list
-                    // Iterator it = value.iterator();
-                    // while (it.hasNext()) {
-                    //     RelationType relation = RelationType.findById(Long.valueOf((String)it.next()));
-                    //     @OneToMany: relation.owningField = entity;
-                    //     @ManyToMany: relation.owningField.add(entity);
-                    //     entity.relation.add(relation);
-                    // }
-                    m.assign(iterator,
-                            m.invokeInterfaceMethod(MethodDescriptor.ofMethod(Iterable.class, "iterator", Iterator.class),
-                                    parameterValue));
-                    try (BytecodeCreator loop = m.whileLoop(bc -> bc.ifTrue(bc.invokeInterfaceMethod(
-                            MethodDescriptor.ofMethod(Iterator.class, "hasNext", boolean.class), iterator))).block()) {
-                        ResultHandle next = loop.checkCast(
-                                loop.invokeInterfaceMethod(MethodDescriptor.ofMethod(Iterator.class, "next", Object.class),
-                                        iterator),
-                                String.class);
-                        EntityField inverseField = field.inverseField;
-                        String relationSignature = "L" + field.relationClass.replace('.', '/') + ";";
-                        AssignableResultHandle otherEntityVar = m.createVariable(relationSignature);
-                        ResultHandle id = convertId(loop, field.relationIdFieldClass, next);
-                        ResultHandle otherEntity = loop.invokeStaticMethod(
-                                MethodDescriptor.ofMethod(field.relationClass, "findById", PanacheEntityBase.class,
-                                        Object.class),
-                                id);
-                        otherEntity = loop.checkCast(otherEntity, field.relationClass);
-                        loop.assign(otherEntityVar, otherEntity);
-                        if (inverseField != null) {
-                            if (field.type == ModelField.Type.MultiMultiRelation) {
-                                ResultHandle inverseRelation = loop.invokeVirtualMethod(
-                                        MethodDescriptor.ofMethod(field.relationClass, inverseField.getGetterName(),
-                                                inverseField.descriptor),
-                                        otherEntityVar);
-                                loop.invokeInterfaceMethod(
-                                        MethodDescriptor.ofMethod(List.class, "add", boolean.class, Object.class),
-                                        inverseRelation, entityVariable);
-                            } else {
-                                loop.invokeVirtualMethod(
-                                        MethodDescriptor.ofMethod(field.relationClass, inverseField.getSetterName(), void.class,
-                                                inverseField.descriptor),
-                                        otherEntityVar, entityVariable);
-                            }
-                        }
-                        ResultHandle relation = loop.invokeVirtualMethod(
-                                MethodDescriptor.ofMethod(entityClass, field.entityField.getGetterName(),
-                                        field.entityField.descriptor),
-                                entityVariable);
-                        loop.invokeInterfaceMethod(MethodDescriptor.ofMethod(List.class, "add", boolean.class, Object.class),
-                                relation, otherEntityVar);
-                    }
-                } else if (field.type == ModelField.Type.Ignore) {
-                    continue;
-                } else if (field.type == ModelField.Type.Relation) {
-                    BranchResult branch = m.ifTrue(m.invokeStaticMethod(
-                            MethodDescriptor.ofMethod(BackUtil.class, "isSet", boolean.class, String.class),
-                            parameterValue));
-                    AssignableResultHandle valueVar = m.createVariable(field.entityField.descriptor);
-                    try (BytecodeCreator tb = branch.trueBranch()) {
-                        // Let's assume a Type Type.valueOf(String) method
-                        value = convertId(tb, field.relationIdFieldClass, parameterValue);
-                        value = tb.invokeStaticMethod(
-                                MethodDescriptor.ofMethod(field.getClassName(), "findById", PanacheEntityBase.class,
-                                        Object.class),
-                                value);
-                        value = tb.checkCast(value, field.entityField.descriptor);
-                        tb.assign(valueVar, value);
-                    }
-                    try (BytecodeCreator fb = branch.falseBranch()) {
-                        fb.assign(valueVar, fb.loadNull());
-                    }
-                    value = valueVar;
-                } else {
-                    throw new RuntimeException("Don't know what to do with field of type " + field.entityField.descriptor
-                            + " from field " + simpleName + "." + field.name);
+                // Handle Binary fields with two parameters
+                if (field.type == ModelField.Type.Binary) {
+                    ResultHandle parameterUnsetValue = parameterValue;
+                    parameterValue = m.getMethodParam(i + offset + 1);
+                    i += 2;
+
+                    FieldProcessingContext context = delegate.buildContext(
+                            m, m, field, entityClass,
+                            entityVariable, parameterValue,
+                            mode == Mode.EDIT ? FieldProcessorDelegate.Mode.EDIT : FieldProcessorDelegate.Mode.CREATE,
+                            i);
+
+                    delegate.processBinaryField(context, parameterUnsetValue, parameterValue);
+                    continue; // Binary fields set value directly
                 }
-                // FIXME: temporary
-                if (value != null)
-                    m.invokeVirtualMethod(MethodDescriptor.ofMethod(entityClass, field.entityField.getSetterName(), void.class,
-                            field.entityField.descriptor), entityVariable, value);
+
+                // Handle MultiRelation fields with special processing
+                if (field.type == ModelField.Type.MultiRelation
+                        || field.type == ModelField.Type.MultiMultiRelation) {
+                    FieldProcessingContext context = delegate.buildContext(
+                            m, m, field, entityClass,
+                            entityVariable, parameterValue,
+                            mode == Mode.EDIT ? FieldProcessorDelegate.Mode.EDIT : FieldProcessorDelegate.Mode.CREATE,
+                            i);
+                    i++;
+
+                    delegate.processMultiRelation(context);
+                    continue; // MultiRelation fields set value directly
+                }
+
+                // Handle Ignore fields
+                if (field.type == ModelField.Type.Ignore) {
+                    i++;
+                    continue;
+                }
+
+                i++;
+
+                // Use FieldProcessor for all other field types
+                FieldProcessingContext context = delegate.buildContext(
+                        m, m, field, entityClass,
+                        entityVariable, parameterValue,
+                        mode == Mode.EDIT ? FieldProcessorDelegate.Mode.EDIT : FieldProcessorDelegate.Mode.CREATE,
+                        i);
+
+                try {
+                    value = delegate.processField(context);
+                } catch (Exception e) {
+                    throw new RuntimeException("Failed to process field: " + field.name, e);
+                }
+
+                // Set the value on the entity
+                if (value != null) {
+                    m.invokeVirtualMethod(
+                            MethodDescriptor.ofMethod(entityClass, field.entityField.getSetterName(), void.class,
+                                    field.entityField.descriptor),
+                            entityVariable, value);
+                }
             }
             if (mode == Mode.CREATE) {
                 m.invokeVirtualMethod(MethodDescriptor.ofMethod(entityClass, "persist", void.class), entityVariable);
