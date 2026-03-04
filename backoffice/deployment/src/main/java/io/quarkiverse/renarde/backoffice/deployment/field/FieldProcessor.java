@@ -1,8 +1,7 @@
 package io.quarkiverse.renarde.backoffice.deployment.field;
 
-import io.quarkus.gizmo.BytecodeCreator;
-import io.quarkus.gizmo.ResultHandle;
 import io.quarkiverse.renarde.jpa.deployment.ModelField;
+import io.quarkus.gizmo.ResultHandle;
 
 /**
  * Strategy interface for processing different field types during bytecode generation.

@@ -2,13 +2,14 @@ package io.quarkiverse.renarde.backoffice.deployment.field;
 
 import java.sql.Blob;
 
+import org.jboss.resteasy.reactive.server.multipart.FormValue;
+
+import io.quarkiverse.renarde.backoffice.impl.BackUtil;
+import io.quarkiverse.renarde.jpa.NamedBlob;
+import io.quarkiverse.renarde.jpa.deployment.ModelField;
 import io.quarkus.gizmo.BranchResult;
 import io.quarkus.gizmo.MethodDescriptor;
 import io.quarkus.gizmo.ResultHandle;
-import io.quarkiverse.renarde.backoffice.impl.BackUtil;
-import io.quarkiverse.renarde.jpa.deployment.ModelField;
-import io.quarkiverse.renarde.jpa.NamedBlob;
-import org.jboss.resteasy.reactive.server.multipart.FormValue;
 
 /**
  * Processor for binary fields (byte[], Blob, NamedBlob).

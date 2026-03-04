@@ -1,17 +1,10 @@
 package io.quarkiverse.renarde.backoffice.deployment.field;
 
+import io.quarkiverse.renarde.jpa.deployment.ModelField;
 import io.quarkus.gizmo.AssignableResultHandle;
 import io.quarkus.gizmo.BytecodeCreator;
 import io.quarkus.gizmo.MethodCreator;
-import io.quarkiverse.renarde.jpa.deployment.ModelField;
-
-/**
- * Processing mode for field handling.
- */
-public enum Mode {
-    EDIT,
-    CREATE
-}
+import io.quarkus.gizmo.ResultHandle;
 
 /**
  * Context object for field processing during bytecode generation.

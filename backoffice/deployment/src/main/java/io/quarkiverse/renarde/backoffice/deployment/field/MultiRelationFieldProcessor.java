@@ -3,13 +3,13 @@ package io.quarkiverse.renarde.backoffice.deployment.field;
 import java.util.ArrayList;
 import java.util.Iterator;
 
+import io.quarkiverse.renarde.jpa.deployment.ModelField;
 import io.quarkus.gizmo.AssignableResultHandle;
 import io.quarkus.gizmo.BytecodeCreator;
 import io.quarkus.gizmo.MethodDescriptor;
 import io.quarkus.gizmo.ResultHandle;
-import io.quarkiverse.renarde.jpa.deployment.EntityField;
-import io.quarkiverse.renarde.jpa.deployment.ModelField;
 import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
+import io.quarkus.panache.common.deployment.EntityField;
 
 /**
  * Processor for multi-relation fields (OneToMany, ManyToMany).
@@ -43,7 +43,7 @@ public class MultiRelationFieldProcessor implements FieldProcessor {
 
         AssignableResultHandle iterator = m.createVariable(Iterator.class);
 
-        if (mode == FieldProcessingContext.Mode.EDIT) {
+        if (mode == Mode.EDIT) {
             // Clear previous relations
             ResultHandle relation = m.invokeVirtualMethod(
                     MethodDescriptor.ofMethod(entityClass, field.entityField.getGetterName(), field.entityField.descriptor),
@@ -72,7 +72,8 @@ public class MultiRelationFieldProcessor implements FieldProcessor {
         } else {
             // Create empty list
             m.invokeVirtualMethod(
-                    MethodDescriptor.ofMethod(entityClass, field.entityField.getSetterName(), void.class, field.entityField.descriptor),
+                    MethodDescriptor.ofMethod(entityClass, field.entityField.getSetterName(), void.class,
+                            field.entityField.descriptor),
                     entityVariable,
                     m.newInstance(MethodDescriptor.ofConstructor(ArrayList.class)));
         }
@@ -118,7 +119,8 @@ public class MultiRelationFieldProcessor implements FieldProcessor {
                     inverseRelation, entityVariable);
         } else {
             loop.invokeVirtualMethod(
-                    MethodDescriptor.ofMethod(field.relationClass, inverseField.getSetterName(), void.class, inverseField.descriptor),
+                    MethodDescriptor.ofMethod(field.relationClass, inverseField.getSetterName(), void.class,
+                            inverseField.descriptor),
                     next, loop.loadNull());
         }
     }
@@ -126,7 +128,8 @@ public class MultiRelationFieldProcessor implements FieldProcessor {
     private void setInverseRelation(BytecodeCreator loop, ModelField field, ResultHandle otherEntity,
             ResultHandle entityVariable) {
         ResultHandle inverseRelation = loop.invokeVirtualMethod(
-                MethodDescriptor.ofMethod(field.relationClass, field.inverseField.getGetterName(), field.inverseField.descriptor),
+                MethodDescriptor.ofMethod(field.relationClass, field.inverseField.getGetterName(),
+                        field.inverseField.descriptor),
                 otherEntity);
 
         if (field.type == ModelField.Type.MultiMultiRelation) {
@@ -135,7 +138,8 @@ public class MultiRelationFieldProcessor implements FieldProcessor {
                     inverseRelation, entityVariable);
         } else {
             loop.invokeVirtualMethod(
-                    MethodDescriptor.ofMethod(field.relationClass, field.inverseField.getSetterName(), void.class, field.inverseField.descriptor),
+                    MethodDescriptor.ofMethod(field.relationClass, field.inverseField.getSetterName(), void.class,
+                            field.inverseField.descriptor),
                     otherEntity, entityVariable);
         }
     }
