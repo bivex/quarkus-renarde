@@ -4,7 +4,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import jakarta.enterprise.context.RequestScoped;
-import jakarta.inject.Named;
+import jakarta.enterprise.inject.Default;
 
 /**
  * Validation context for storing validation errors that need to be persisted across redirects.
@@ -12,7 +12,7 @@ import jakarta.inject.Named;
  *
  * Flash writes errors to this context, and Validation reads from it.
  */
-@Named("validationContext")
+@Default
 @RequestScoped
 public class ValidationContext {
 
